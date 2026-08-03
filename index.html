@@ -1066,8 +1066,9 @@ const labelOverrides = (savedDraft && savedDraft.labels && typeof savedDraft.lab
   ? {
       groups: (savedDraft.labels.groups && typeof savedDraft.labels.groups === 'object') ? savedDraft.labels.groups : {},
       items: (savedDraft.labels.items && typeof savedDraft.labels.items === 'object') ? savedDraft.labels.items : {},
+      codes: (savedDraft.labels.codes && typeof savedDraft.labels.codes === 'object') ? savedDraft.labels.codes : {},
     }
-  : { groups: {}, items: {} };
+  : { groups: {}, items: {}, codes: {} };
 
 function getGroupName(gi) {
   const override = labelOverrides.groups[gi];
@@ -1076,6 +1077,14 @@ function getGroupName(gi) {
 function getItemName(nr, defaultName) {
   const override = labelOverrides.items[nr];
   return (override && override.trim()) || defaultName;
+}
+function getItemCode(nr, defaultCode) {
+  // Anders als bei Namen ist hier auch eine bewusst geleerte Angabe gültig
+  // (Code entfernen) – daher Prüfung auf "wurde überhaupt überschrieben?"
+  // statt nur auf einen nicht-leeren Wert.
+  return Object.prototype.hasOwnProperty.call(labelOverrides.codes, nr)
+    ? labelOverrides.codes[nr]
+    : (defaultCode || '');
 }
 
 DATA.forEach((g, gi) => {
@@ -1145,7 +1154,7 @@ DATA.forEach((g, gi) => {
       <div class="item-head">
         <span class="item-nr">${nr}</span>
         <span class="item-name-row">
-          <span class="item-name" id="item-name-${nr}">${escapeHtml(getItemName(nr, name))}${code ? `<span class="item-code">${code}</span>` : ''}</span>
+          <span class="item-name" id="item-name-${nr}">${escapeHtml(getItemName(nr, name))}${getItemCode(nr, code) ? `<span class="item-code">${escapeHtml(getItemCode(nr, code))}</span>` : ''}</span>
           <button type="button" class="edit-label-btn" data-role="edit-item" title="Punkt umbenennen" aria-label="Punkt umbenennen">✎</button>
         </span>
       </div>
@@ -1185,14 +1194,21 @@ DATA.forEach((g, gi) => {
     const photoInput = item.querySelector('[data-role="photoinput"]');
 
     item.querySelector('[data-role="edit-item"]').addEventListener('click', () => {
-      const current = getItemName(nr, name);
-      const next = prompt('Punkt umbenennen:', current);
-      if (next !== null && next.trim() !== '') {
-        labelOverrides.items[nr] = next.trim();
-        const nameEl = document.getElementById(`item-name-${nr}`);
-        nameEl.innerHTML = `${escapeHtml(next.trim())}${code ? `<span class="item-code">${code}</span>` : ''}`;
-        saveDraft();
+      const currentName = getItemName(nr, name);
+      const nextName = prompt('Punkt umbenennen:', currentName);
+      if (nextName !== null && nextName.trim() !== '') {
+        labelOverrides.items[nr] = nextName.trim();
       }
+      const currentCode = getItemCode(nr, code);
+      const nextCode = prompt('Info/Kürzel ändern (z. B. "A 001"), leer lassen zum Entfernen:', currentCode);
+      if (nextCode !== null) {
+        labelOverrides.codes[nr] = nextCode.trim();
+      }
+      const finalCode = getItemCode(nr, code);
+      const nameEl = document.getElementById(`item-name-${nr}`);
+      nameEl.innerHTML = `${escapeHtml(getItemName(nr, name))}${finalCode ? `<span class="item-code">${escapeHtml(finalCode)}</span>` : ''}`;
+      syncGroupHeight();
+      saveDraft();
     });
     const photoThumbs = item.querySelector('[data-role="photothumbs"]');
 
@@ -1470,7 +1486,7 @@ function buildPdf(){
         const pruef = (s.wasSet && s.gepruft) ? 'X' : '';
         const m = (s.status === 'maengel') ? 'X' : '';
         const f = (s.status === 'fehlend') ? 'X' : '';
-        rows.push([String(nr), pruef, getItemName(nr, name), m, f, code||'']);
+        rows.push([String(nr), pruef, getItemName(nr, name), m, f, getItemCode(nr, code)]);
       });
     });
     return rows;
