@@ -937,7 +937,7 @@ function saveDraft() {
       const meta = {};
       metaIds.forEach(id => { const el = document.getElementById(id); if (el) meta[id] = el.value; });
       const savedAt = Date.now();
-      localStorage.setItem(reportKey(ACTIVE_ID), JSON.stringify({state, meta, labels: labelOverrides, customItems, customOrder, removed: removedNrs, savedAt}));
+      localStorage.setItem(reportKey(ACTIVE_ID), JSON.stringify({state, meta, labels: labelOverrides, customItems, customOrder, removed: removedNrs, customGroups, customGroupOrder, removedGroups, savedAt}));
       const list = getIndex();
       const idx = list.findIndex(r => r.id === ACTIVE_ID);
       const entry = {
@@ -1069,9 +1069,10 @@ const labelOverrides = (savedDraft && savedDraft.labels && typeof savedDraft.lab
     }
   : { groups: {}, items: {}, codes: {} };
 
-function getGroupName(gi) {
-  const override = labelOverrides.groups[gi];
-  return (override && override.trim()) || DATA[gi].group;
+function getGroupName(gid) {
+  const base = DATA[gid] ? DATA[gid].group : (customGroups[gid] ? customGroups[gid].name : '');
+  const override = labelOverrides.groups[gid];
+  return (override && override.trim()) || base;
 }
 function getItemName(nr, defaultName) {
   const override = labelOverrides.items[nr];
@@ -1099,6 +1100,15 @@ const customItems = (savedDraft && savedDraft.customItems && typeof savedDraft.c
 const customOrder = Array.isArray(savedDraft && savedDraft.customOrder) ? savedDraft.customOrder.slice() : Object.keys(customItems);
 const removedNrs = (savedDraft && savedDraft.removed && typeof savedDraft.removed === 'object') ? savedDraft.removed : {};
 
+// customGroups: vom Nutzer neu angelegte Gruppen, keyed nach ihrer eigenen (String-)ID.
+//   { [gid]: {name, afterGi} } — afterGi verweist auf die Standard-Gruppe (Zahl) oder
+//   eine weitere neue Gruppe (String), nach der diese Gruppe eingefügt wurde.
+// customGroupOrder: Einfügereihenfolge der customGroups-Schlüssel.
+// removedGroups: Gruppen-ID (Standard ODER custom), die für diesen Bericht ausgeblendet wurde.
+const customGroups = (savedDraft && savedDraft.customGroups && typeof savedDraft.customGroups === 'object') ? savedDraft.customGroups : {};
+const customGroupOrder = Array.isArray(savedDraft && savedDraft.customGroupOrder) ? savedDraft.customGroupOrder.slice() : Object.keys(customGroups);
+const removedGroups = (savedDraft && savedDraft.removedGroups && typeof savedDraft.removedGroups === 'object') ? savedDraft.removedGroups : {};
+
 function getDisplayName(nr) {
   const base = customItems[nr] ? customItems[nr].name : (STANDARD_ITEM_INFO[nr] ? STANDARD_ITEM_INFO[nr].name : '');
   return getItemName(nr, base);
@@ -1120,10 +1130,16 @@ function nextCustomId(anchorNr) {
   while (Object.prototype.hasOwnProperty.call(customItems, candidate) || Object.prototype.hasOwnProperty.call(STANDARD_ITEM_INFO, candidate));
   return candidate;
 }
+function nextCustomGroupId(anchorGid) {
+  let n = 1, candidate;
+  do { candidate = `g_${anchorGid}.${n}`; n++; }
+  while (Object.prototype.hasOwnProperty.call(customGroups, candidate));
+  return candidate;
+}
 // Liefert die Nr. aller derzeit sichtbaren Zeilen einer Gruppe, in Anzeigereihenfolge:
-// Standard-Zeilen (sofern nicht gelöscht), direkt gefolgt von allen an sie angehängten
-// neuen Zeilen (rekursiv, falls auch an eine neue Zeile weitere angehängt wurden).
-function activeItemsForGroup(gi) {
+// Standard-Zeilen (sofern nicht gelöscht) bzw. bei neuen Gruppen deren direkt zugeordnete
+// Zeilen, jeweils gefolgt von allen an sie angehängten neuen Zeilen (rekursiv).
+function activeItemsForGroup(gid) {
   const result = [];
   function pushChain(nr) {
     if (removedNrs[nr]) return;
@@ -1133,7 +1149,30 @@ function activeItemsForGroup(gi) {
       if (ci && ci.afterNr === nr) pushChain(cid);
     });
   }
-  DATA[gi].items.forEach(([nr]) => pushChain(nr));
+  if (DATA[gid]) {
+    DATA[gid].items.forEach(([nr]) => pushChain(nr));
+  }
+  // Zeilen, die direkt (ohne Anker an eine bestehende Zeile) dieser Gruppe zugeordnet sind —
+  // nötig für neu angelegte, anfangs leere Gruppen.
+  customOrder.forEach(cid => {
+    const ci = customItems[cid];
+    if (ci && ci.group === gid && !ci.afterNr) pushChain(cid);
+  });
+  return result;
+}
+// Liefert die IDs aller derzeit sichtbaren Gruppen, in Anzeigereihenfolge: Standard-Gruppen
+// (sofern nicht gelöscht), jeweils gefolgt von allen an sie angehängten neuen Gruppen.
+function activeGroups() {
+  const result = [];
+  function pushChain(gid) {
+    if (removedGroups[gid]) return;
+    result.push(gid);
+    customGroupOrder.forEach(cgid => {
+      const cg = customGroups[cgid];
+      if (cg && cg.afterGi === gid) pushChain(cgid);
+    });
+  }
+  DATA.forEach((g, gi) => pushChain(gi));
   return result;
 }
 
@@ -1146,14 +1185,14 @@ let displayNumberOf = {};
 function recomputeDisplayNumbers() {
   displayNumberOf = {};
   let n = 1;
-  DATA.forEach((g, gi) => {
-    activeItemsForGroup(gi).forEach(nr => { displayNumberOf[nr] = n++; });
+  activeGroups().forEach(gid => {
+    activeItemsForGroup(gid).forEach(nr => { displayNumberOf[nr] = n++; });
   });
 }
 function refreshAllDisplayNumbers() {
   recomputeDisplayNumbers();
-  DATA.forEach((g, gi) => {
-    activeItemsForGroup(gi).forEach(nr => {
+  activeGroups().forEach(gid => {
+    activeItemsForGroup(gid).forEach(nr => {
       const el = document.getElementById(`item-nr-${nr}`);
       if (el) el.textContent = String(displayNumberOf[nr]);
     });
@@ -1161,23 +1200,26 @@ function refreshAllDisplayNumbers() {
 }
 recomputeDisplayNumbers();
 
-DATA.forEach((g, gi) => {
+function buildGroupElement(gid) {
   const groupDiv = document.createElement('div');
   groupDiv.className = 'group';
-  groupDiv.dataset.gi = gi;
+  groupDiv.dataset.gid = gid;
 
   const head = document.createElement('div');
   head.className = 'group-head utility';
   head.setAttribute('role', 'button');
   head.setAttribute('tabindex', '0');
+  const initialCount = activeItemsForGroup(gid).length;
   head.innerHTML = `
     <div>
-      <div class="group-title" id="group-title-${gi}">${escapeHtml(getGroupName(gi))}</div>
-      <div class="group-sub" id="group-sub-${gi}">${g.items.length} Punkte</div>
+      <div class="group-title" id="group-title-${gid}">${escapeHtml(getGroupName(gid))}</div>
+      <div class="group-sub" id="group-sub-${gid}">${initialCount} Punkt${initialCount === 1 ? '' : 'e'}</div>
     </div>
     <div class="group-right">
       <button type="button" class="edit-label-btn" data-role="edit-group" title="Gruppe umbenennen" aria-label="Gruppe umbenennen">✎</button>
-      <span class="group-count" id="count-${gi}">0/${g.items.length}</span>
+      <button type="button" class="edit-label-btn danger" data-role="delete-group" title="Gruppe löschen" aria-label="Gruppe löschen">−</button>
+      <button type="button" class="edit-label-btn" data-role="add-group" title="Neue Gruppe danach einfügen" aria-label="Neue Gruppe danach einfügen">+</button>
+      <span class="group-count" id="count-${gid}">0/${initialCount}</span>
       <span class="chevron"></span>
     </div>`;
   function toggleGroup() {
@@ -1186,21 +1228,43 @@ DATA.forEach((g, gi) => {
     body.style.maxHeight = groupDiv.classList.contains('open') ? body.scrollHeight + 'px' : '0px';
   }
   head.addEventListener('click', (ev) => {
-    if (ev.target.closest('.edit-label-btn')) return; // Umbenennen hat eigenen Handler
+    if (ev.target.closest('.edit-label-btn')) return; // Umbenennen/Löschen/Hinzufügen haben eigene Handler
     toggleGroup();
   });
   head.addEventListener('keydown', (ev) => {
     if (ev.target === head && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); toggleGroup(); }
   });
-  head.querySelector('.edit-label-btn').addEventListener('click', (ev) => {
+  head.querySelector('[data-role="edit-group"]').addEventListener('click', (ev) => {
     ev.stopPropagation();
-    const current = getGroupName(gi);
+    const current = getGroupName(gid);
     const next = prompt('Gruppe umbenennen:', current);
     if (next !== null && next.trim() !== '') {
-      labelOverrides.groups[gi] = next.trim();
-      document.getElementById(`group-title-${gi}`).textContent = next.trim();
+      labelOverrides.groups[gid] = next.trim();
+      document.getElementById(`group-title-${gid}`).textContent = next.trim();
       saveDraft();
     }
+  });
+  head.querySelector('[data-role="delete-group"]').addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    if (confirm('Diese gesamte Gruppe inkl. aller enthaltenen Punkte aus diesem Bericht entfernen? Nicht rückgängig zu machen; andere Berichte sind nicht betroffen.')) {
+      removedGroups[gid] = true;
+      renderAllGroups();
+      refreshAllDisplayNumbers();
+      updateProgress();
+      saveDraft();
+    }
+  });
+  head.querySelector('[data-role="add-group"]').addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    const newName = prompt('Neue Gruppe danach einfügen – Name:', '');
+    if (newName === null || newName.trim() === '') return;
+    const newGid = nextCustomGroupId(gid);
+    customGroups[newGid] = { name: newName.trim(), afterGi: gid };
+    customGroupOrder.push(newGid);
+    renderAllGroups();
+    refreshAllDisplayNumbers();
+    updateProgress();
+    saveDraft();
   });
 
   const body = document.createElement('div');
@@ -1299,7 +1363,7 @@ DATA.forEach((g, gi) => {
       if (newName === null || newName.trim() === '') return;
       const newCode = prompt('Info/Kürzel (optional):', '');
       const newNr = nextCustomId(nr);
-      customItems[newNr] = { group: gi, name: newName.trim(), code: (newCode || '').trim(), afterNr: nr };
+      customItems[newNr] = { group: gid, name: newName.trim(), code: (newCode || '').trim(), afterNr: nr };
       customOrder.push(newNr);
       ensureState(newNr);
       renderGroupBody();
@@ -1380,21 +1444,58 @@ DATA.forEach((g, gi) => {
 
   function renderGroupBody() {
     body.innerHTML = '';
-    activeItemsForGroup(gi).forEach(nr => body.appendChild(buildItemElement(nr)));
+    const items = activeItemsForGroup(gid);
+    if (!items.length) {
+      const empty = document.createElement('div');
+      empty.className = 'item';
+      empty.innerHTML = `<button type="button" class="new-report-btn" data-role="add-first-item" style="margin:0;">+ Punkt hinzufügen</button>`;
+      empty.querySelector('[data-role="add-first-item"]').addEventListener('click', () => {
+        const newName = prompt('Neuer Punkt – Bezeichnung:', '');
+        if (newName === null || newName.trim() === '') return;
+        const newCode = prompt('Info/Kürzel (optional):', '');
+        const newNr = nextCustomId(String(gid));
+        customItems[newNr] = { group: gid, name: newName.trim(), code: (newCode || '').trim(), afterNr: null };
+        customOrder.push(newNr);
+        ensureState(newNr);
+        renderGroupBody();
+        refreshAllDisplayNumbers();
+        updateProgress();
+        saveDraft();
+      });
+      body.appendChild(empty);
+    } else {
+      items.forEach(nr => body.appendChild(buildItemElement(nr)));
+    }
     syncGroupHeight();
   }
   renderGroupBody();
 
   groupDiv.appendChild(head);
   groupDiv.appendChild(body);
-  groupsEl.appendChild(groupDiv);
-});
+  return groupDiv;
+}
+
+function renderAllGroups() {
+  const openGids = new Set();
+  groupsEl.querySelectorAll('.group.open').forEach(el => openGids.add(el.dataset.gid));
+  groupsEl.innerHTML = '';
+  activeGroups().forEach(gid => {
+    const el = buildGroupElement(gid);
+    groupsEl.appendChild(el);
+    if (openGids.has(String(gid))) {
+      el.classList.add('open');
+      const body = el.querySelector('.group-body');
+      body.style.maxHeight = body.scrollHeight + 'px';
+    }
+  });
+}
+renderAllGroups();
 
 function updateProgress() {
   let doneCount = 0;
   let totalActive = 0;
-  DATA.forEach((g, gi) => {
-    const items = activeItemsForGroup(gi);
+  activeGroups().forEach((gid) => {
+    const items = activeItemsForGroup(gid);
     let groupDone = 0;
     items.forEach(nr => {
       const s = state[nr];
@@ -1403,12 +1504,12 @@ function updateProgress() {
       if (isDone) { groupDone++; doneCount++; }
     });
     totalActive += items.length;
-    const countEl = document.getElementById(`count-${gi}`);
+    const countEl = document.getElementById(`count-${gid}`);
     if (countEl) {
       countEl.textContent = `${groupDone}/${items.length}`;
       countEl.classList.toggle('complete', items.length > 0 && groupDone === items.length);
     }
-    const subEl = document.getElementById(`group-sub-${gi}`);
+    const subEl = document.getElementById(`group-sub-${gid}`);
     if (subEl) subEl.textContent = `${items.length} Punkt${items.length === 1 ? '' : 'e'}`;
   });
   const pct = totalActive ? (doneCount/totalActive*100) : 0;
@@ -1591,13 +1692,12 @@ function buildPdf(){
   doc.text('Überwachung der Auftragnehmer bei der Anwendung der Schutzmaßnahmen', 12, y);
   y += 3;
 
-  function buildBody(groups){
+  function buildBody(gids){
     const rows = [];
-    groups.forEach(g => {
-      const gi = DATA.indexOf(g);
-      const items = activeItemsForGroup(gi);
+    gids.forEach(gid => {
+      const items = activeItemsForGroup(gid);
       if (!items.length) return; // Gruppe für diesen Bericht evtl. komplett geleert
-      rows.push([{content:getGroupName(gi), colSpan:6, styles:{fontStyle:'bold', fillColor:[233,228,218], textColor:[40,35,30], fontSize:6.6}}]);
+      rows.push([{content:getGroupName(gid), colSpan:6, styles:{fontStyle:'bold', fillColor:[233,228,218], textColor:[40,35,30], fontSize:6.6}}]);
       items.forEach(nr => {
         const s = state[nr];
         const pruef = (s.wasSet && s.gepruft) ? 'X' : '';
@@ -1655,16 +1755,21 @@ function buildPdf(){
     didDrawCell,
   };
 
+  const allGroupIds = activeGroups();
+  const splitIdx = Math.ceil(allGroupIds.length / 2);
+  const leftGroupIds = allGroupIds.slice(0, splitIdx);
+  const rightGroupIds = allGroupIds.slice(splitIdx);
+
   doc.autoTable(Object.assign({}, commonOpts, {
     head:[HEAD_ROW],
-    body: buildBody(DATA.slice(0,6)),
+    body: buildBody(leftGroupIds),
     tableWidth:90,
     margin:{left:12, right:108},
   }));
 
   doc.autoTable(Object.assign({}, commonOpts, {
     head:[HEAD_ROW],
-    body: buildBody(DATA.slice(6)),
+    body: buildBody(rightGroupIds),
     tableWidth:88,
     margin:{left:108, right:12},
   }));
@@ -1686,7 +1791,7 @@ function buildPdf(){
   const flagged = [];
   let photoCounter = 0;
   const allPhotos = [];
-  DATA.forEach((g, gi) => activeItemsForGroup(gi).forEach(nr => {
+  activeGroups().forEach(gid => activeItemsForGroup(gid).forEach(nr => {
     const s = state[nr];
     if (s.wasSet && s.gepruft && (s.status === 'maengel' || s.status === 'fehlend')) {
       const nums = [];
