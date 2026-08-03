@@ -496,6 +496,45 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     font-size:12px; text-align:center;
   }
 
+  /* Übersichtsbildschirm: Liste aller Berichte / Baustellen */
+  .back-btn{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    font-size:12px; background:none; border:none; color:var(--paper); opacity:.75;
+    padding:0 0 6px; cursor:pointer; display:block;
+  }
+  .overview-body{padding:14px;}
+  .new-report-btn{
+    width:100%; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    font-size:15px; font-weight:700; padding:14px; border-radius:var(--radius);
+    border:none; background:var(--accent); color:#fff; cursor:pointer; margin-bottom:14px;
+  }
+  .new-report-btn:active{transform:scale(.98);}
+  .overview-empty{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    color:var(--muted); font-size:13.5px; text-align:center; padding:30px 10px;
+  }
+  .report-card{
+    background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
+    padding:12px 14px; margin-bottom:10px; display:flex; align-items:center; justify-content:space-between; gap:10px;
+  }
+  .report-card-title{font-size:15.5px; font-weight:600;}
+  .report-card-sub{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    font-size:12px; color:var(--muted); margin-top:2px;
+  }
+  .report-card-when{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    font-size:11px; color:var(--muted); margin-top:4px; opacity:.8;
+  }
+  .report-card-actions{display:flex; flex-direction:column; gap:6px; flex-shrink:0;}
+  .open-report-btn, .delete-report-btn{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    font-size:12px; font-weight:600; padding:7px 11px; border-radius:7px; cursor:pointer;
+    border:1.5px solid var(--line); white-space:nowrap;
+  }
+  .open-report-btn{background:var(--ink); color:#fff; border-color:var(--ink);}
+  .delete-report-btn{background:#fdfcfa; color:var(--bad);}
+
   main{padding:0 14px;}
 
   .group{
@@ -640,7 +679,20 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
 </head>
 <body>
 
+<div id="overviewScreen" style="display:none;">
+  <header class="top">
+    <p class="eyebrow">Koordination nach BaustellV</p>
+    <h1>Überwachungsberichte</h1>
+  </header>
+  <div class="overview-body">
+    <button type="button" class="new-report-btn" id="newReportBtn">+ Neuer Bericht</button>
+    <div id="reportList"></div>
+  </div>
+</div>
+
+<div id="appScreen" style="display:none;">
 <header class="top">
+  <button type="button" class="back-btn" id="backToOverviewBtn">← Alle Berichte</button>
   <p class="eyebrow">Koordination nach BaustellV</p>
   <h1>Überwachungsbericht – Schutzmaßnahmen</h1>
   <div class="progress-wrap">
@@ -687,7 +739,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
   </div>
   <div class="meta-footer utility">
     <span id="saveIndicator">Änderungen werden automatisch auf diesem Gerät gespeichert</span>
-    <button type="button" id="resetDraftBtn">Neuen Bericht beginnen</button>
+    <button type="button" id="resetDraftBtn">Diesen Bericht löschen</button>
   </div>
 </div>
 
@@ -703,6 +755,8 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
   <div class="bar-status utility" id="barStatus">Noch keine Angaben</div>
   <button class="export-btn" id="exportBtn">Bericht als PDF</button>
 </footer>
+
+</div><!-- /#appScreen -->
 
 <div class="toast" id="toast"></div>
 
@@ -818,23 +872,77 @@ DATA.forEach(g => g.items.forEach(() => totalItems++));
 
 const groupsEl = document.getElementById('groups');
 
-// ---------- Persistenz (lokal im Browser, überlebt Neuladen/Offline) ----------
-const STORAGE_KEY = 'sigeko_bericht_entwurf_v1';
+// ---------- Persistenz: mehrere Berichte (ein Bericht je Baustelle/Begehung) ----------
+const INDEX_KEY = 'sigeko_index_v1';
+const REPORT_KEY_PREFIX = 'sigeko_report_v1_';
+const ACTIVE_KEY = 'sigeko_active_v1';
+const OLD_SINGLE_KEY = 'sigeko_bericht_entwurf_v1'; // Format der ersten Version dieser App
+
+const metaIds = ['f_bauherr','f_bauvorhaben','f_gewerk','f_berichtnr','f_datum','f_ort','f_koordinator','f_naechste'];
+
+function getIndex() {
+  try { return JSON.parse(localStorage.getItem(INDEX_KEY)) || []; }
+  catch(e) { return []; }
+}
+function setIndex(list) {
+  try { localStorage.setItem(INDEX_KEY, JSON.stringify(list)); } catch(e) {}
+}
+function reportKey(id) { return REPORT_KEY_PREFIX + id; }
+function newId() { return 'r_' + Date.now() + '_' + Math.random().toString(36).slice(2,7); }
+
+// Einmalig: alten Einzel-Entwurf (vor Einführung mehrerer Berichte) in die neue Struktur übernehmen
+(function migrateOldSingleDraft() {
+  if (localStorage.getItem(INDEX_KEY)) return; // schon migriert bzw. neu angelegt
+  let old = null;
+  try { old = JSON.parse(localStorage.getItem(OLD_SINGLE_KEY)); } catch(e) {}
+  if (!old) { setIndex([]); return; }
+  const id = newId();
+  try { localStorage.setItem(reportKey(id), JSON.stringify(old)); } catch(e) {}
+  setIndex([{
+    id,
+    bauvorhaben: (old.meta && old.meta.f_bauvorhaben) || '',
+    ort: (old.meta && old.meta.f_ort) || '',
+    berichtnr: (old.meta && old.meta.f_berichtnr) || '',
+    datum: (old.meta && old.meta.f_datum) || '',
+    updatedAt: old.savedAt || Date.now(),
+  }]);
+  try { localStorage.removeItem(OLD_SINGLE_KEY); } catch(e) {}
+})();
+
+let ACTIVE_ID = null;
+try { ACTIVE_ID = localStorage.getItem(ACTIVE_KEY); } catch(e) { ACTIVE_ID = null; }
+
 let savedDraft = null;
-try {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (raw) savedDraft = JSON.parse(raw);
-} catch(e) { savedDraft = null; }
+if (ACTIVE_ID) {
+  try {
+    const raw = localStorage.getItem(reportKey(ACTIVE_ID));
+    if (raw) savedDraft = JSON.parse(raw);
+    else ACTIVE_ID = null; // Bericht existiert nicht (mehr) -> zurück zur Übersicht
+  } catch(e) { savedDraft = null; ACTIVE_ID = null; }
+}
 
 let saveTimer = null;
 function saveDraft() {
+  if (!ACTIVE_ID) return;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     try {
       const meta = {};
-      ['f_bauherr','f_bauvorhaben','f_gewerk','f_berichtnr','f_datum','f_ort','f_koordinator','f_naechste']
-        .forEach(id => { const el = document.getElementById(id); if (el) meta[id] = el.value; });
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({state, meta, savedAt: Date.now()}));
+      metaIds.forEach(id => { const el = document.getElementById(id); if (el) meta[id] = el.value; });
+      const savedAt = Date.now();
+      localStorage.setItem(reportKey(ACTIVE_ID), JSON.stringify({state, meta, savedAt}));
+      const list = getIndex();
+      const idx = list.findIndex(r => r.id === ACTIVE_ID);
+      const entry = {
+        id: ACTIVE_ID,
+        bauvorhaben: meta.f_bauvorhaben || '',
+        ort: meta.f_ort || '',
+        berichtnr: meta.f_berichtnr || '',
+        datum: meta.f_datum || '',
+        updatedAt: savedAt,
+      };
+      if (idx >= 0) list[idx] = entry; else list.push(entry);
+      setIndex(list);
       setSaveIndicator('gespeichert');
     } catch(e) {
       setSaveIndicator('Speichern fehlgeschlagen (evtl. zu viele/große Fotos) – bitte bald exportieren', true);
@@ -847,9 +955,76 @@ function setSaveIndicator(msg, warn) {
   el.textContent = msg;
   el.style.color = warn ? '#a3312a' : '';
 }
-function clearDraft() {
-  try { localStorage.removeItem(STORAGE_KEY); } catch(e) {}
+function deleteReport(id) {
+  try { localStorage.removeItem(reportKey(id)); } catch(e) {}
+  setIndex(getIndex().filter(r => r.id !== id));
 }
+function openReport(id) {
+  try { localStorage.setItem(ACTIVE_KEY, id); } catch(e) {}
+  location.reload();
+}
+function createReport() {
+  const id = newId();
+  const list = getIndex();
+  const now = Date.now();
+  list.push({ id, bauvorhaben: '', ort: '', berichtnr: '', datum: '', updatedAt: now });
+  setIndex(list);
+  // Sofort einen (leeren) Datensatz anlegen, damit ein Reload direkt nach dem
+  // Anlegen nicht auf die Übersicht zurückfällt, bevor die erste Eingabe gespeichert wurde.
+  try { localStorage.setItem(reportKey(id), JSON.stringify({state:{}, meta:{}, savedAt: now})); } catch(e) {}
+  openReport(id);
+}
+function backToOverview() {
+  try { localStorage.removeItem(ACTIVE_KEY); } catch(e) {}
+  location.reload();
+}
+
+// ---------- Bildschirm umschalten: Übersicht aller Berichte vs. aktueller Bericht ----------
+document.getElementById('overviewScreen').style.display = ACTIVE_ID ? 'none' : 'block';
+document.getElementById('appScreen').style.display = ACTIVE_ID ? 'block' : 'none';
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function renderOverview() {
+  const list = getIndex().slice().sort((a,b) => (b.updatedAt||0) - (a.updatedAt||0));
+  const el = document.getElementById('reportList');
+  if (!list.length) {
+    el.innerHTML = '<p class="overview-empty">Noch keine Berichte gespeichert. Mit „+ Neuer Bericht" beginnen.</p>';
+    return;
+  }
+  el.innerHTML = list.map(r => {
+    const title = r.bauvorhaben || 'Ohne Bauvorhaben';
+    const sub = [r.ort, r.berichtnr ? 'Bericht-Nr. ' + r.berichtnr : '', r.datum].filter(Boolean).join(' · ');
+    const when = r.updatedAt ? new Date(r.updatedAt).toLocaleString('de-DE') : '';
+    return `
+      <div class="report-card">
+        <div class="report-card-main">
+          <div class="report-card-title">${escapeHtml(title)}</div>
+          <div class="report-card-sub">${escapeHtml(sub)}</div>
+          <div class="report-card-when">Zuletzt geändert: ${when}</div>
+        </div>
+        <div class="report-card-actions">
+          <button type="button" class="open-report-btn" data-id="${r.id}">Öffnen</button>
+          <button type="button" class="delete-report-btn" data-id="${r.id}">Löschen</button>
+        </div>
+      </div>`;
+  }).join('');
+  el.querySelectorAll('.open-report-btn').forEach(btn => {
+    btn.addEventListener('click', () => openReport(btn.dataset.id));
+  });
+  el.querySelectorAll('.delete-report-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (confirm('Diesen Bericht endgültig löschen? Das kann nicht rückgängig gemacht werden.')) {
+        deleteReport(btn.dataset.id);
+        renderOverview();
+      }
+    });
+  });
+}
+if (!ACTIVE_ID) renderOverview();
+document.getElementById('newReportBtn').addEventListener('click', createReport);
 
 function compressImage(file){
   return new Promise((resolve, reject) => {
@@ -1049,7 +1224,6 @@ function showToast(msg) {
 
 // ---------- Meta-Felder: laden, Auto-Save, Reset ----------
 (function initMetaAndPersistence(){
-  const metaIds = ['f_bauherr','f_bauvorhaben','f_gewerk','f_berichtnr','f_datum','f_ort','f_koordinator','f_naechste'];
   if (savedDraft && savedDraft.meta) {
     metaIds.forEach(id => {
       const el = document.getElementById(id);
@@ -1067,11 +1241,13 @@ function showToast(msg) {
   }
 
   document.getElementById('resetDraftBtn').addEventListener('click', () => {
-    if (confirm('Neuen Bericht beginnen? Der gespeicherte Entwurf auf diesem Gerät wird dabei gelöscht.')) {
-      clearDraft();
-      location.reload();
+    if (confirm('Diesen Bericht endgültig löschen? Das kann nicht rückgängig gemacht werden.')) {
+      if (ACTIVE_ID) deleteReport(ACTIVE_ID);
+      backToOverview();
     }
   });
+  const backBtn = document.getElementById('backToOverviewBtn');
+  if (backBtn) backBtn.addEventListener('click', backToOverview);
 
   function updateOfflineBanner() {
     document.getElementById('offlineBanner').style.display = navigator.onLine ? 'none' : 'block';
