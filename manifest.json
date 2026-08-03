@@ -1,0 +1,31 @@
+{
+  "name": "SiGeKo Überwachungsbericht",
+  "short_name": "SiGeKo Bericht",
+  "description": "Checkliste für Überwachungsberichte nach BaustellV mit PDF-Export",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f5f3ef",
+  "theme_color": "#2b3a4a",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
