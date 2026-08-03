@@ -1123,6 +1123,16 @@ DATA.forEach((g, gi) => {
   const body = document.createElement('div');
   body.className = 'group-body';
 
+  // Wird nach jeder Inhaltsänderung innerhalb dieser Gruppe aufgerufen (Status
+  // eingeblendet, Foto hinzugefügt/entfernt etc.), damit die für die Auf-/Zu-
+  // Animation nötige max-height nicht auf einem veralteten, zu kleinen Wert
+  // hängen bleibt und neue Inhalte abschneidet.
+  function syncGroupHeight() {
+    if (groupDiv.classList.contains('open')) {
+      body.style.maxHeight = body.scrollHeight + 'px';
+    }
+  }
+
   g.items.forEach(([nr, name, code]) => {
     const savedItem = savedDraft && savedDraft.state && savedDraft.state[nr];
     state[nr] = savedItem
@@ -1199,6 +1209,7 @@ DATA.forEach((g, gi) => {
         });
         photoThumbs.appendChild(t);
       });
+      syncGroupHeight();
     }
 
     photoAddBtn.addEventListener('click', () => photoInput.click());
@@ -1226,6 +1237,7 @@ DATA.forEach((g, gi) => {
       photoSection.style.display = needsExtra ? 'block' : 'none';
       if (!s.gepruft || !s.wasSet) { s.status = null; }
       if (!needsExtra) { /* keep note text in memory but hidden; do not clear so user doesn't lose input on accidental toggle */ }
+      syncGroupHeight();
     }
 
     btnJa.addEventListener('click', () => {
