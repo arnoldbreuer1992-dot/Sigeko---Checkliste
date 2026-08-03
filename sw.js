@@ -1,7 +1,7 @@
 // Service Worker für die SiGeKo-Checkliste
 // Cache-Version erhöhen (z.B. v2, v3 ...), wenn index.html geändert wird,
 // damit installierte Geräte die neue Version laden.
-const CACHE_NAME = 'sigeko-checkliste-v7';
+const CACHE_NAME = 'sigeko-checkliste-v8';
 const ASSETS = [
   './index.html',
   './manifest.json',

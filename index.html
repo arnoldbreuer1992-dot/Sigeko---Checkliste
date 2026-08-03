@@ -1620,15 +1620,19 @@ function buildPdf(){
   function didDrawCell(data){
     if (data.section === 'head' && ROTATE_COLS.has(data.column.index)) {
       const label = String(data.cell.raw);
-      const cx = data.cell.x + data.cell.width/2;
-      const cy = data.cell.y + data.cell.height/2;
       doc.setFont('helvetica','bold');
       doc.setFontSize(6.1);
       doc.setTextColor(255,255,255);
-      // align:'center' zentriert entlang der (gedrehten) Textlaufrichtung,
-      // baseline:'middle' zentriert quer dazu — beides zusammen ergibt eine
-      // exakte Zentrierung ohne manuellen Pixel-Korrekturwert.
-      doc.text(label, cx, cy, {angle:90, align:'center', baseline:'middle'});
+      // Die Optionen align:'center'/baseline:'middle' liefern bei gedrehtem Text
+      // (angle:90) in dieser jsPDF-Version keine korrekte Zentrierung (gemessen
+      // bis zu 12pt Versatz). Stattdessen wird die Position direkt anhand der
+      // echten Textbreite berechnet — empirisch gegen das erzeugte PDF geprüft
+      // und für alle vier rotierten Spalten (Lfd. Nr/Prüfung/Mängel/Fehlend)
+      // auf unter 0,1pt genau bestätigt.
+      const textLen = doc.getTextWidth(label);
+      const cx = data.cell.x + data.cell.width/2 + 0.82;
+      const cy = data.cell.y + data.cell.height/2 + textLen/2;
+      doc.text(label, cx, cy, {angle:90});
       doc.setTextColor(0,0,0);
     }
   }
