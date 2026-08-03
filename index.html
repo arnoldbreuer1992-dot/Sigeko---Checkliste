@@ -593,6 +593,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     cursor:pointer; flex-shrink:0; -webkit-tap-highlight-color:transparent;
   }
   .edit-label-btn:active{transform:scale(.94);}
+  .edit-label-btn.danger{color:#a3312a; border-color:#e2b3ac;}
 
   .btnrow{display:flex; gap:8px; flex-wrap:wrap;}
   .toggle-btn{
@@ -875,8 +876,6 @@ const STATUS_LABEL = {ok:"Alles in Ordnung", maengel:"Mängel", fehlend:"Fehlend
 
 // state[nr] = {gepruft, wasSet, status, note, verantwortlich, photos:[{dataUrl}]}
 const state = {};
-let totalItems = 0;
-DATA.forEach(g => g.items.forEach(() => totalItems++));
 
 const groupsEl = document.getElementById('groups');
 
@@ -938,7 +937,7 @@ function saveDraft() {
       const meta = {};
       metaIds.forEach(id => { const el = document.getElementById(id); if (el) meta[id] = el.value; });
       const savedAt = Date.now();
-      localStorage.setItem(reportKey(ACTIVE_ID), JSON.stringify({state, meta, labels: labelOverrides, savedAt}));
+      localStorage.setItem(reportKey(ACTIVE_ID), JSON.stringify({state, meta, labels: labelOverrides, customItems, customOrder, removed: removedNrs, savedAt}));
       const list = getIndex();
       const idx = list.findIndex(r => r.id === ACTIVE_ID);
       const entry = {
@@ -1087,6 +1086,57 @@ function getItemCode(nr, defaultCode) {
     : (defaultCode || '');
 }
 
+// ---------- Zusätzliche/gelöschte Zeilen je Bericht ----------
+// Nachschlagetabelle Standard-Nr. -> {name, code} aus DATA, für schnellen Zugriff.
+const STANDARD_ITEM_INFO = {};
+DATA.forEach(g => g.items.forEach(([nr, name, code]) => { STANDARD_ITEM_INFO[nr] = {name, code: code || ''}; }));
+
+// customItems: vom Nutzer neu hinzugefügte Zeilen, keyed nach ihrer eigenen (String-)Nr.
+//   { [nr]: {group: gi, name, code, afterNr} }
+// customOrder: Einfügereihenfolge der customItems-Schlüssel (für stabile Reihenfolge bei mehreren Geschwister-Zeilen).
+// removedNrs: Nr. (Standard ODER custom), die für diesen Bericht ausgeblendet wurde. { [nr]: true }
+const customItems = (savedDraft && savedDraft.customItems && typeof savedDraft.customItems === 'object') ? savedDraft.customItems : {};
+const customOrder = Array.isArray(savedDraft && savedDraft.customOrder) ? savedDraft.customOrder.slice() : Object.keys(customItems);
+const removedNrs = (savedDraft && savedDraft.removed && typeof savedDraft.removed === 'object') ? savedDraft.removed : {};
+
+function getDisplayName(nr) {
+  const base = customItems[nr] ? customItems[nr].name : (STANDARD_ITEM_INFO[nr] ? STANDARD_ITEM_INFO[nr].name : '');
+  return getItemName(nr, base);
+}
+function getDisplayCode(nr) {
+  const base = customItems[nr] ? (customItems[nr].code || '') : (STANDARD_ITEM_INFO[nr] ? STANDARD_ITEM_INFO[nr].code : '');
+  return getItemCode(nr, base);
+}
+function ensureState(nr) {
+  if (state[nr]) return;
+  const savedItem = savedDraft && savedDraft.state && savedDraft.state[nr];
+  state[nr] = savedItem
+    ? {gepruft:!!savedItem.gepruft, wasSet:!!savedItem.wasSet, status:savedItem.status||null, note:savedItem.note||'', verantwortlich:savedItem.verantwortlich||'', photos:Array.isArray(savedItem.photos)?savedItem.photos:[]}
+    : {gepruft:false, wasSet:false, status:null, note:'', verantwortlich:'', photos:[]};
+}
+function nextCustomId(anchorNr) {
+  let n = 1, candidate;
+  do { candidate = `${anchorNr}.${n}`; n++; }
+  while (Object.prototype.hasOwnProperty.call(customItems, candidate) || Object.prototype.hasOwnProperty.call(STANDARD_ITEM_INFO, candidate));
+  return candidate;
+}
+// Liefert die Nr. aller derzeit sichtbaren Zeilen einer Gruppe, in Anzeigereihenfolge:
+// Standard-Zeilen (sofern nicht gelöscht), direkt gefolgt von allen an sie angehängten
+// neuen Zeilen (rekursiv, falls auch an eine neue Zeile weitere angehängt wurden).
+function activeItemsForGroup(gi) {
+  const result = [];
+  function pushChain(nr) {
+    if (removedNrs[nr]) return;
+    result.push(nr);
+    customOrder.forEach(cid => {
+      const ci = customItems[cid];
+      if (ci && ci.afterNr === nr) pushChain(cid);
+    });
+  }
+  DATA[gi].items.forEach(([nr]) => pushChain(nr));
+  return result;
+}
+
 DATA.forEach((g, gi) => {
   const groupDiv = document.createElement('div');
   groupDiv.className = 'group';
@@ -1099,7 +1149,7 @@ DATA.forEach((g, gi) => {
   head.innerHTML = `
     <div>
       <div class="group-title" id="group-title-${gi}">${escapeHtml(getGroupName(gi))}</div>
-      <div class="group-sub">${g.items.length} Punkte</div>
+      <div class="group-sub" id="group-sub-${gi}">${g.items.length} Punkte</div>
     </div>
     <div class="group-right">
       <button type="button" class="edit-label-btn" data-role="edit-group" title="Gruppe umbenennen" aria-label="Gruppe umbenennen">✎</button>
@@ -1142,11 +1192,8 @@ DATA.forEach((g, gi) => {
     }
   }
 
-  g.items.forEach(([nr, name, code]) => {
-    const savedItem = savedDraft && savedDraft.state && savedDraft.state[nr];
-    state[nr] = savedItem
-      ? {gepruft:!!savedItem.gepruft, wasSet:!!savedItem.wasSet, status:savedItem.status||null, note:savedItem.note||'', verantwortlich:savedItem.verantwortlich||'', photos:Array.isArray(savedItem.photos)?savedItem.photos:[]}
-      : {gepruft:false, wasSet:false, status:null, note:'', verantwortlich:'', photos:[]};
+  function buildItemElement(nr) {
+    ensureState(nr);
 
     const item = document.createElement('div');
     item.className = 'item';
@@ -1154,8 +1201,10 @@ DATA.forEach((g, gi) => {
       <div class="item-head">
         <span class="item-nr">${nr}</span>
         <span class="item-name-row">
-          <span class="item-name" id="item-name-${nr}">${escapeHtml(getItemName(nr, name))}${getItemCode(nr, code) ? `<span class="item-code">${escapeHtml(getItemCode(nr, code))}</span>` : ''}</span>
+          <span class="item-name" id="item-name-${nr}">${escapeHtml(getDisplayName(nr))}${getDisplayCode(nr) ? `<span class="item-code">${escapeHtml(getDisplayCode(nr))}</span>` : ''}</span>
           <button type="button" class="edit-label-btn" data-role="edit-item" title="Punkt umbenennen" aria-label="Punkt umbenennen">✎</button>
+          <button type="button" class="edit-label-btn danger" data-role="delete-item" title="Punkt löschen" aria-label="Punkt löschen">−</button>
+          <button type="button" class="edit-label-btn" data-role="add-item" title="Neue Zeile danach einfügen" aria-label="Neue Zeile danach einfügen">+</button>
         </span>
       </div>
       <div class="btnrow utility">
@@ -1194,22 +1243,45 @@ DATA.forEach((g, gi) => {
     const photoInput = item.querySelector('[data-role="photoinput"]');
 
     item.querySelector('[data-role="edit-item"]').addEventListener('click', () => {
-      const currentName = getItemName(nr, name);
+      const currentName = getDisplayName(nr);
       const nextName = prompt('Punkt umbenennen:', currentName);
       if (nextName !== null && nextName.trim() !== '') {
         labelOverrides.items[nr] = nextName.trim();
       }
-      const currentCode = getItemCode(nr, code);
+      const currentCode = getDisplayCode(nr);
       const nextCode = prompt('Info/Kürzel ändern (z. B. "A 001"), leer lassen zum Entfernen:', currentCode);
       if (nextCode !== null) {
         labelOverrides.codes[nr] = nextCode.trim();
       }
-      const finalCode = getItemCode(nr, code);
+      const finalCode = getDisplayCode(nr);
       const nameEl = document.getElementById(`item-name-${nr}`);
-      nameEl.innerHTML = `${escapeHtml(getItemName(nr, name))}${finalCode ? `<span class="item-code">${escapeHtml(finalCode)}</span>` : ''}`;
+      nameEl.innerHTML = `${escapeHtml(getDisplayName(nr))}${finalCode ? `<span class="item-code">${escapeHtml(finalCode)}</span>` : ''}`;
       syncGroupHeight();
       saveDraft();
     });
+
+    item.querySelector('[data-role="delete-item"]').addEventListener('click', () => {
+      if (confirm('Diesen Punkt aus diesem Bericht entfernen? Nicht rückgängig zu machen; andere Berichte sind nicht betroffen.')) {
+        removedNrs[nr] = true;
+        renderGroupBody();
+        updateProgress();
+        saveDraft();
+      }
+    });
+
+    item.querySelector('[data-role="add-item"]').addEventListener('click', () => {
+      const newName = prompt('Neue Zeile danach einfügen – Bezeichnung:', '');
+      if (newName === null || newName.trim() === '') return;
+      const newCode = prompt('Info/Kürzel (optional):', '');
+      const newNr = nextCustomId(nr);
+      customItems[newNr] = { group: gi, name: newName.trim(), code: (newCode || '').trim(), afterNr: nr };
+      customOrder.push(newNr);
+      ensureState(newNr);
+      renderGroupBody();
+      updateProgress();
+      saveDraft();
+    });
+
     const photoThumbs = item.querySelector('[data-role="photothumbs"]');
 
     function renderThumbs(){
@@ -1277,8 +1349,15 @@ DATA.forEach((g, gi) => {
     renderThumbs();
     refreshItemUI();
 
-    body.appendChild(item);
-  });
+    return item;
+  }
+
+  function renderGroupBody() {
+    body.innerHTML = '';
+    activeItemsForGroup(gi).forEach(nr => body.appendChild(buildItemElement(nr)));
+    syncGroupHeight();
+  }
+  renderGroupBody();
 
   groupDiv.appendChild(head);
   groupDiv.appendChild(body);
@@ -1287,22 +1366,31 @@ DATA.forEach((g, gi) => {
 
 function updateProgress() {
   let doneCount = 0;
+  let totalActive = 0;
   DATA.forEach((g, gi) => {
+    const items = activeItemsForGroup(gi);
     let groupDone = 0;
-    g.items.forEach(([nr]) => {
+    items.forEach(nr => {
       const s = state[nr];
+      if (!s) return;
       const isDone = s.wasSet && (s.gepruft === false || (s.gepruft === true && s.status));
       if (isDone) { groupDone++; doneCount++; }
     });
+    totalActive += items.length;
     const countEl = document.getElementById(`count-${gi}`);
-    countEl.textContent = `${groupDone}/${g.items.length}`;
-    countEl.classList.toggle('complete', groupDone === g.items.length);
+    if (countEl) {
+      countEl.textContent = `${groupDone}/${items.length}`;
+      countEl.classList.toggle('complete', items.length > 0 && groupDone === items.length);
+    }
+    const subEl = document.getElementById(`group-sub-${gi}`);
+    if (subEl) subEl.textContent = `${items.length} Punkt${items.length === 1 ? '' : 'e'}`;
   });
-  document.getElementById('progressFill').style.width = (doneCount/totalItems*100) + '%';
-  document.getElementById('progressLabel').textContent = `${doneCount} von ${totalItems} Punkten geprüft`;
-  document.getElementById('barStatus').textContent = doneCount === totalItems
+  const pct = totalActive ? (doneCount/totalActive*100) : 0;
+  document.getElementById('progressFill').style.width = pct + '%';
+  document.getElementById('progressLabel').textContent = `${doneCount} von ${totalActive} Punkten geprüft`;
+  document.getElementById('barStatus').textContent = (doneCount === totalActive && totalActive > 0)
     ? 'Alle Punkte erfasst – bereit zum Export'
-    : `${totalItems - doneCount} Punkte noch offen`;
+    : `${totalActive - doneCount} Punkte noch offen`;
 }
 updateProgress();
 
@@ -1480,13 +1568,15 @@ function buildPdf(){
     const rows = [];
     groups.forEach(g => {
       const gi = DATA.indexOf(g);
+      const items = activeItemsForGroup(gi);
+      if (!items.length) return; // Gruppe für diesen Bericht evtl. komplett geleert
       rows.push([{content:getGroupName(gi), colSpan:6, styles:{fontStyle:'bold', fillColor:[233,228,218], textColor:[40,35,30], fontSize:6.6}}]);
-      g.items.forEach(([nr,name,code]) => {
+      items.forEach(nr => {
         const s = state[nr];
         const pruef = (s.wasSet && s.gepruft) ? 'X' : '';
         const m = (s.status === 'maengel') ? 'X' : '';
         const f = (s.status === 'fehlend') ? 'X' : '';
-        rows.push([String(nr), pruef, getItemName(nr, name), m, f, getItemCode(nr, code)]);
+        rows.push([String(nr), pruef, getDisplayName(nr), m, f, getDisplayCode(nr)]);
       });
     });
     return rows;
@@ -1503,12 +1593,15 @@ function buildPdf(){
   function didDrawCell(data){
     if (data.section === 'head' && ROTATE_COLS.has(data.column.index)) {
       const label = String(data.cell.raw);
-      const cx = data.cell.x + data.cell.width/2 + 1.3;
+      const cx = data.cell.x + data.cell.width/2;
       const cy = data.cell.y + data.cell.height/2;
       doc.setFont('helvetica','bold');
       doc.setFontSize(6.1);
       doc.setTextColor(255,255,255);
-      doc.text(label, cx, cy, {angle:90, align:'center'});
+      // align:'center' zentriert entlang der (gedrehten) Textlaufrichtung,
+      // baseline:'middle' zentriert quer dazu — beides zusammen ergibt eine
+      // exakte Zentrierung ohne manuellen Pixel-Korrekturwert.
+      doc.text(label, cx, cy, {angle:90, align:'center', baseline:'middle'});
       doc.setTextColor(0,0,0);
     }
   }
@@ -1562,7 +1655,7 @@ function buildPdf(){
   const flagged = [];
   let photoCounter = 0;
   const allPhotos = [];
-  DATA.forEach(g => g.items.forEach(([nr, name]) => {
+  DATA.forEach((g, gi) => activeItemsForGroup(gi).forEach(nr => {
     const s = state[nr];
     if (s.wasSet && s.gepruft && (s.status === 'maengel' || s.status === 'fehlend')) {
       const nums = [];
@@ -1575,7 +1668,7 @@ function buildPdf(){
       if (nums.length) {
         text += (text ? ' – siehe ' : 'Siehe ') + formatBildRef(nums) + '.';
       }
-      flagged.push({nr, name: getItemName(nr, name), status:s.status, text: text || '(kein Kommentar erfasst)', verantwortlich: s.verantwortlich || ''});
+      flagged.push({nr, name: getDisplayName(nr), status:s.status, text: text || '(kein Kommentar erfasst)', verantwortlich: s.verantwortlich || ''});
     }
   }));
 
