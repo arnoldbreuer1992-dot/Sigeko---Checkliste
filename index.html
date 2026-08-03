@@ -1137,6 +1137,30 @@ function activeItemsForGroup(gi) {
   return result;
 }
 
+// ---------- Fortlaufende, lückenlose Anzeigenummern ----------
+// Die interne Kennung (nr/uid) jedes Punkts ändert sich NIE — daran hängen
+// gespeicherter Status, Fotos, Texte. Was der Nutzer als "Lfd. Nr" sieht, ist
+// stattdessen die reine Position in der aktuell sichtbaren Gesamtliste über
+// alle Gruppen hinweg, und wird nach jedem Löschen/Hinzufügen neu vergeben.
+let displayNumberOf = {};
+function recomputeDisplayNumbers() {
+  displayNumberOf = {};
+  let n = 1;
+  DATA.forEach((g, gi) => {
+    activeItemsForGroup(gi).forEach(nr => { displayNumberOf[nr] = n++; });
+  });
+}
+function refreshAllDisplayNumbers() {
+  recomputeDisplayNumbers();
+  DATA.forEach((g, gi) => {
+    activeItemsForGroup(gi).forEach(nr => {
+      const el = document.getElementById(`item-nr-${nr}`);
+      if (el) el.textContent = String(displayNumberOf[nr]);
+    });
+  });
+}
+recomputeDisplayNumbers();
+
 DATA.forEach((g, gi) => {
   const groupDiv = document.createElement('div');
   groupDiv.className = 'group';
@@ -1199,7 +1223,7 @@ DATA.forEach((g, gi) => {
     item.className = 'item';
     item.innerHTML = `
       <div class="item-head">
-        <span class="item-nr">${nr}</span>
+        <span class="item-nr" id="item-nr-${nr}">${displayNumberOf[nr] || ''}</span>
         <span class="item-name-row">
           <span class="item-name" id="item-name-${nr}">${escapeHtml(getDisplayName(nr))}${getDisplayCode(nr) ? `<span class="item-code">${escapeHtml(getDisplayCode(nr))}</span>` : ''}</span>
           <button type="button" class="edit-label-btn" data-role="edit-item" title="Punkt umbenennen" aria-label="Punkt umbenennen">✎</button>
@@ -1264,6 +1288,7 @@ DATA.forEach((g, gi) => {
       if (confirm('Diesen Punkt aus diesem Bericht entfernen? Nicht rückgängig zu machen; andere Berichte sind nicht betroffen.')) {
         removedNrs[nr] = true;
         renderGroupBody();
+        refreshAllDisplayNumbers();
         updateProgress();
         saveDraft();
       }
@@ -1278,6 +1303,7 @@ DATA.forEach((g, gi) => {
       customOrder.push(newNr);
       ensureState(newNr);
       renderGroupBody();
+      refreshAllDisplayNumbers();
       updateProgress();
       saveDraft();
     });
@@ -1537,6 +1563,7 @@ function drawFreigabeBlock(doc, y, data) {
 }
 
 function buildPdf(){
+  recomputeDisplayNumbers(); // sicherstellen, dass Lfd.-Nr. im PDF exakt der aktuellen Ansicht entspricht
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({unit:'mm', format:'a4'});
 
@@ -1576,7 +1603,7 @@ function buildPdf(){
         const pruef = (s.wasSet && s.gepruft) ? 'X' : '';
         const m = (s.status === 'maengel') ? 'X' : '';
         const f = (s.status === 'fehlend') ? 'X' : '';
-        rows.push([String(nr), pruef, getDisplayName(nr), m, f, getDisplayCode(nr)]);
+        rows.push([String(displayNumberOf[nr] || ''), pruef, getDisplayName(nr), m, f, getDisplayCode(nr)]);
       });
     });
     return rows;
@@ -1662,13 +1689,13 @@ function buildPdf(){
       s.photos.forEach(p => {
         photoCounter++;
         nums.push(photoCounter);
-        allPhotos.push({num:photoCounter, dataUrl:p.dataUrl, itemNr:nr});
+        allPhotos.push({num:photoCounter, dataUrl:p.dataUrl, itemNr:displayNumberOf[nr] || nr});
       });
       let text = (s.note || '').trim();
       if (nums.length) {
         text += (text ? ' – siehe ' : 'Siehe ') + formatBildRef(nums) + '.';
       }
-      flagged.push({nr, name: getDisplayName(nr), status:s.status, text: text || '(kein Kommentar erfasst)', verantwortlich: s.verantwortlich || ''});
+      flagged.push({nr: displayNumberOf[nr] || nr, name: getDisplayName(nr), status:s.status, text: text || '(kein Kommentar erfasst)', verantwortlich: s.verantwortlich || ''});
     }
   }));
 
